@@ -11,13 +11,9 @@
 
   vars_prompt:
     - name: ireallymeanit
-      prompt: Are you sure you want to purge the cluster?
-      default: 'no'
-      private: no
-
-    - name: remove_packages
       prompt: >
-        If --skip-tags=with_pkg is not set docker packages
+        Are you sure you want to purge the cluster?
+        Note that if with_pkg is not set docker packages
         and more will be uninstalled from non-atomic hosts.
         Do you want to continue?
       default: 'no'
@@ -33,21 +29,10 @@
          invoking the playbook"
     when: ireallymeanit != 'yes'
 
-  - name: exit playbook, if user did not mean to remove packages
-    fail:
-      msg: >
-        "Exiting purge-docker-cluster playbook. No packages were removed.
-         To skip removing packages use --skip-tag=with_pkg. To continue
-         with removing packages, do not specify --skip-tag=with_pkg and
-         either say 'yes' on the prompt or use `-e remove_packages=yes`
-         on the command line when invoking the playbook"
-    when: remove_packages != 'yes'
-
   - name: set ceph_docker_registry value if not set
     set_fact:
       ceph_docker_registry: "docker.io"
     when: ceph_docker_registry is not defined
-
 
 - name: purge ceph mds cluster
 
@@ -86,6 +71,7 @@
       force: yes
     tags:
       remove_img
+    ignore_errors: true
 
 - name: purge ceph mgr cluster
 
@@ -122,6 +108,7 @@
       force: yes
     tags:
       remove_img
+    ignore_errors: true
 
 - name: purge ceph rgw cluster
 
@@ -172,6 +159,7 @@
       force: yes
     tags:
       remove_img
+    ignore_errors: true
 
 
 - name: purge ceph rbd-mirror cluster
@@ -272,8 +260,9 @@
 
   - name: get all the running osds
     shell: |
-      systemctl list-units | grep "loaded active" | grep -oE "ceph-osd@([0-9]{1,2}|[a-z]+).service"
+      systemctl list-units | grep 'loaded[[:space:]]\+active' | grep -oE "ceph-osd@([0-9]{1,2}|[a-z]+).service"
     register: osd_units
+    ignore_errors: true
 
   - name: disable ceph osd service
     service:
@@ -285,46 +274,12 @@
   - name: get prepare container
     command: "docker ps -a -q --filter='name=ceph-osd-prepare'"
     register: prepare_containers
+    ignore_errors: true
 
   - name: remove ceph osd prepare container
     command: "docker rm -f {{ item }}"
     with_items: "{{ prepare_containers.stdout_lines }}"
-
-  - name: see if ceph-disk-created data partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*.data"
-    failed_when: false
-    register: ceph_data_partlabels
-
-  - name: see if ceph-disk-created block partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*block$"
-    failed_when: false
-    register: ceph_block_partlabels
-
-  - name: see if ceph-disk-created journal partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*.journal"
-    failed_when: false
-    register: ceph_journal_partlabels
-
-  - name: see if ceph-disk-created block db partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*.block.db"
-    failed_when: false
-    register: ceph_db_partlabels
-
-  - name: see if ceph-disk-created block wal partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*.block.wal"
-    failed_when: false
-    register: ceph_wal_partlabels
-
-  - name: see if ceph-disk-created lockbox partitions are present
-    shell: |
-      ls /dev/disk/by-partlabel | grep -q "ceph.*.lockbox"
-    failed_when: false
-    register: ceph_lockbox_partlabels
+    ignore_errors: true
 
   # NOTE(leseb): hope someone will find a more elegant way one day...
   - name: see if encrypted partitions are present
@@ -340,65 +295,71 @@
     ignore_errors: true
 
   - name: get ceph data partitions
-    shell: |
-      blkid | awk -F: '/ceph data/ { print $1 }'
-    when: ceph_data_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph data"
     failed_when: false
     register: ceph_data_partition_to_erase_path
 
   - name: get ceph lockbox partitions
-    shell: |
-      blkid | awk '/ceph lockbox/ { sub (":", "", $1); print $1 }'
-    when: ceph_lockbox_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph lockbox"
     failed_when: false
     register: ceph_lockbox_partition_to_erase_path
 
   - name: get ceph block partitions
-    shell: |
-      blkid | awk '/ceph block"/ { sub (":", "", $1); print $1 }'
-    when: ceph_block_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph block"
     failed_when: false
     register: ceph_block_partition_to_erase_path
 
   - name: get ceph journal partitions
-    shell: |
-      blkid | awk '/ceph journal/ { sub (":", "", $1); print $1 }'
-    when: ceph_journal_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph journal"
     failed_when: false
     register: ceph_journal_partition_to_erase_path
 
   - name: get ceph db partitions
-    shell: |
-      blkid | awk '/ceph block.db/ { sub (":", "", $1); print $1 }'
-    when: ceph_db_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph block.db"
     failed_when: false
     register: ceph_db_partition_to_erase_path
 
   - name: get ceph wal partitions
-    shell: |
-      blkid | awk '/ceph block.wal/ { sub (":", "", $1); print $1 }'
-    when: ceph_wal_partlabels.rc == 0
+    command: |
+      blkid -o device -t PARTLABEL="ceph block.wal"
     failed_when: false
     register: ceph_wal_partition_to_erase_path
+
+  - name: set_fact combined_devices_list
+    set_fact:
+      combined_devices_list: "{{ ceph_data_partition_to_erase_path.get('stdout_lines', []) +
+                                 ceph_lockbox_partition_to_erase_path.get('stdout_lines', []) +
+                                 ceph_block_partition_to_erase_path.get('stdout_lines', []) +
+                                 ceph_journal_partition_to_erase_path.get('stdout_lines', []) +
+                                 ceph_db_partition_to_erase_path.get('stdout_lines', []) +
+                                 ceph_wal_partition_to_erase_path.get('stdout_lines', []) }}"
+
+  - name: resolve parent device
+    command: lsblk --nodeps -no pkname "{{ item }}"
+    register: tmp_resolved_parent_device
+    with_items:
+      - "{{ combined_devices_list }}"
+
+  - name: set_fact resolved_parent_device
+    set_fact:
+      resolved_parent_device: "{{ tmp_resolved_parent_device.results | map(attribute='stdout') | list | unique }}"
 
   - name: zap ceph osd disks
     shell: |
       docker run --rm \
       --privileged=true \
-      --name ceph-osd-zap-{{ ansible_hostname }}-{{ item[:-1] | regex_replace('/dev/', '') }} \
+      --name ceph-osd-zap-{{ ansible_hostname }}-{{ item }} \
       -v /dev/:/dev/ \
-      -e OSD_DEVICE={{ item[:-1] }} \
+      -e OSD_DEVICE=/dev/{{ item }} \
       {{ ceph_docker_registry }}/{{ ceph_docker_image }}:{{ ceph_docker_image_tag }} \
       zap_device
     with_items:
-      - "{{ ceph_data_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_lockbox_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_block_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_journal_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_db_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_wal_partition_to_erase_path.stdout_lines | default([]) }}"
-    when:
-      - (ceph_data_partlabels.rc == 0 or ceph_block_partlabels.rc == 0 or ceph_journal_partlabels.rc == 0 or ceph_db_partlabels.rc == 0 or ceph_wal_partlabels.rc == 0)
+      - "{{ resolved_parent_device }}"
 
   - name: wait until the zap containers die
     shell: |
@@ -412,15 +373,10 @@
   - name: remove ceph osd zap disk container
     docker:
       image: "{{ ceph_docker_registry }}/{{ ceph_docker_image }}:{{ ceph_docker_image_tag }}"
-      name: "ceph-osd-zap-{{ ansible_hostname }}-{{ item[:-1] | regex_replace('/dev/', '') }}"
+      name: "ceph-osd-zap-{{ ansible_hostname }}-{{ item }}"
       state: absent
     with_items:
-      - "{{ ceph_data_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_lockbox_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_block_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_journal_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_db_partition_to_erase_path.stdout_lines | default([]) }}"
-      - "{{ ceph_wal_partition_to_erase_path.stdout_lines | default([]) }}"
+      - "{{ resolved_parent_device }}"
 
   - name: remove ceph osd service
     file:
@@ -436,6 +392,7 @@
       force: yes
     tags:
       remove_img
+    ignore_errors: true
 
   - name: include vars from group_vars/osds.yml
     include_vars:
@@ -503,7 +460,12 @@
       force: yes
     tags:
       remove_img
+    ignore_errors: true
 
+  - name: remove ceph aliases
+    file:
+      path: /etc/profile.d/ceph-aliases.sh
+      state: absent
 
 - name: remove installed packages
 
@@ -536,6 +498,7 @@
       state: stopped
       enabled: no
     when: not is_atomic
+    ignore_errors: true
 
   - name: remove docker-py on Debian
     pip:
@@ -708,5 +671,5 @@
 
   - name: purge fetch directory for localhost
     file:
-      path: "{{ fetch_directory }}"
+      path: "{{ fetch_directory }}/"
       state: absent

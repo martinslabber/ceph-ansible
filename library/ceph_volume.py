@@ -1,5 +1,6 @@
 #!/usr/bin/python
 import datetime
+import json
 
 ANSIBLE_METADATA = {
     'metadata_version': '1.0',
@@ -24,17 +25,19 @@ options:
             - The ceph cluster name.
         required: false
         default: ceph
-    subcommand:
-        description:
-            - The ceph-volume subcommand to use.
-        required: false
-        default: lvm
-        choices: ['lvm']
     objectstore:
         description:
             - The objectstore of the OSD, either filestore or bluestore
-        required: true
+            - Required if action is 'create'
+        required: false
         choices: ['bluestore', 'filestore']
+        default: bluestore
+    action:
+        description:
+            - The action to take. Either creating OSDs or zapping devices.
+        required: true
+        choices: ['create', 'zap']
+        default: create
     data:
         description:
             - The logical volume name or device to use for the OSD data.
@@ -72,6 +75,14 @@ options:
         description:
             - If wal is a lv, this must be the name of the volume group it belongs to.
             - Only applicable if objectstore is 'bluestore'.
+        required: false
+    crush_device_class:
+        description:
+            - Will set the crush device class for the OSD.
+        required: false
+    dmcrypt:
+        description:
+            - If set to True the OSD will be encrypted with dmcrypt.
         required: false
 
 
@@ -129,28 +140,8 @@ def get_wal(wal, wal_vg):
     return wal
 
 
-def run_module():
-    module_args = dict(
-        cluster=dict(type='str', required=False, default='ceph'),
-        subcommand=dict(type='str', required=False, default='lvm'),
-        objectstore=dict(type='str', required=True),
-        data=dict(type='str', required=True),
-        data_vg=dict(type='str', required=False),
-        journal=dict(type='str', required=False),
-        journal_vg=dict(type='str', required=False),
-        db=dict(type='str', required=False),
-        db_vg=dict(type='str', required=False),
-        wal=dict(type='str', required=False),
-        wal_vg=dict(type='str', required=False),
-    )
-
-    module = AnsibleModule(
-        argument_spec=module_args,
-        supports_check_mode=True
-    )
-
+def create_osd(module):
     cluster = module.params['cluster']
-    subcommand = module.params['subcommand']
     objectstore = module.params['objectstore']
     data = module.params['data']
     data_vg = module.params.get('data_vg', None)
@@ -160,12 +151,14 @@ def run_module():
     db_vg = module.params.get('db_vg', None)
     wal = module.params.get('wal', None)
     wal_vg = module.params.get('wal_vg', None)
+    crush_device_class = module.params.get('crush_device_class', None)
+    dmcrypt = module.params['dmcrypt']
 
     cmd = [
         'ceph-volume',
         '--cluster',
         cluster,
-        subcommand,
+        'lvm',
         'create',
         '--%s' % objectstore,
         '--data',
@@ -186,6 +179,12 @@ def run_module():
         wal = get_wal(wal, wal_vg)
         cmd.extend(["--block.wal", wal])
 
+    if crush_device_class:
+        cmd.extend(["--crush-device-class", crush_device_class])
+
+    if dmcrypt:
+        cmd.append("--dmcrypt")
+
     result = dict(
         changed=False,
         cmd=cmd,
@@ -202,6 +201,8 @@ def run_module():
 
     # check to see if osd already exists
     # FIXME: this does not work when data is a raw device
+    # support for 'lvm list' and raw devices was added with https://github.com/ceph/ceph/pull/20620 but
+    # has not made it to a luminous release as of 12.2.4
     rc, out, err = module.run_command(["ceph-volume", "lvm", "list", data], encoding=None)
     if rc == 0:
         result["stdout"] = "skipped, since {0} is already used for an osd".format(data)
@@ -230,6 +231,114 @@ def run_module():
         module.fail_json(msg='non-zero return code', **result)
 
     module.exit_json(**result)
+
+
+def zap_devices(module):
+    """
+    Will run 'ceph-volume lvm zap' on all devices, lvs and partitions
+    used to create the OSD. The --destroy flag is always passed so that
+    if an OSD was originally created with a raw device or partition for
+    'data' then any lvs that were created by ceph-volume are removed.
+    """
+    data = module.params['data']
+    data_vg = module.params.get('data_vg', None)
+    journal = module.params.get('journal', None)
+    journal_vg = module.params.get('journal_vg', None)
+    db = module.params.get('db', None)
+    db_vg = module.params.get('db_vg', None)
+    wal = module.params.get('wal', None)
+    wal_vg = module.params.get('wal_vg', None)
+
+    base_zap_cmd = [
+        'ceph-volume',
+        'lvm',
+        'zap',
+        # for simplicity always --destroy. It will be needed
+        # for raw devices and will noop for lvs.
+        '--destroy',
+    ]
+
+    commands = []
+
+    data = get_data(data, data_vg)
+
+    commands.append(base_zap_cmd + [data])
+
+    if journal:
+        journal = get_journal(journal, journal_vg)
+        commands.append(base_zap_cmd + [journal])
+
+    if db:
+        db = get_db(db, db_vg)
+        commands.append(base_zap_cmd + [db])
+
+    if wal:
+        wal = get_wal(wal, wal_vg)
+        commands.append(base_zap_cmd + [wal])
+
+    result = dict(
+        changed=True,
+        rc=0,
+    )
+    command_results = []
+    for cmd in commands:
+        startd = datetime.datetime.now()
+
+        rc, out, err = module.run_command(cmd, encoding=None)
+
+        endd = datetime.datetime.now()
+        delta = endd - startd
+
+        cmd_result = dict(
+            cmd=cmd,
+            stdout_lines=out.split("\n"),
+            stderr_lines=err.split("\n"),
+            rc=rc,
+            start=str(startd),
+            end=str(endd),
+            delta=str(delta),
+        )
+
+        if rc != 0:
+            module.fail_json(msg='non-zero return code', **cmd_result)
+
+        command_results.append(cmd_result)
+
+    result["commands"] = command_results
+
+    module.exit_json(**result)
+
+
+def run_module():
+    module_args = dict(
+        cluster=dict(type='str', required=False, default='ceph'),
+        objectstore=dict(type='str', required=False, choices=['bluestore', 'filestore'], default='bluestore'),
+        action=dict(type='str', required=False, choices=['create', 'zap'], default='create'),
+        data=dict(type='str', required=True),
+        data_vg=dict(type='str', required=False),
+        journal=dict(type='str', required=False),
+        journal_vg=dict(type='str', required=False),
+        db=dict(type='str', required=False),
+        db_vg=dict(type='str', required=False),
+        wal=dict(type='str', required=False),
+        wal_vg=dict(type='str', required=False),
+        crush_device_class=dict(type='str', required=False),
+        dmcrypt=dict(type='bool', required=False, default=False),
+    )
+
+    module = AnsibleModule(
+        argument_spec=module_args,
+        supports_check_mode=True
+    )
+
+    action = module.params['action']
+
+    if action == "create":
+        create_osd(module)
+    elif action == "zap":
+        zap_devices(module)
+
+    module.fail_json(msg='State must either be "present" or "absent".', changed=False, rc=1)
 
 
 def main():

@@ -8,10 +8,21 @@
 - name: include check_mandatory_vars.yml
   include: check_mandatory_vars.yml
 
-- name: include pre_requisite.yml
-  include: pre_requisite.yml
+- name: include system_tuning.yml
+  include: system_tuning.yml
+  # Hard code this so we will skip the entire file instead of individual tasks (Default isn't Consistent)
+  static: False
+
+- name: install dependencies
+  package:
+    name: parted
+    state: present
   when:
     - not containerized_deployment
+    - ansible_os_family != 'ClearLinux'
+
+- name: include common.yml
+  include: common.yml
   # Hard code this so we will skip the entire file instead of individual tasks (Default isn't Consistent)
   static: False
 
@@ -21,20 +32,12 @@
 - name: include build_devices.yml
   include: build_devices.yml
 
-- name: check if a partition named 'ceph' exists
-  shell: "parted --script {{ item }} print | egrep -sq '^ 1.*ceph'"
-  with_items:
-    - "{{ devices }}"
-  changed_when: false
-  failed_when: false
-  check_mode: no
+- name: read information about the devices
+  parted:
+    device: "{{ item }}"
+    unit: MiB
   register: parted_results
-
-- name: include copy_configs.yml
-  include: copy_configs.yml
-  when:
-    - containerized_deployment
-    - not containerized_deployment_with_kv
+  with_items: "{{ devices }}"
 
 - name: include check_gpt.yml
   include: check_gpt.yml

@@ -1,3 +1,4 @@
+.vscode/*
 .vagrant
 *.vdi
 *.keyring
@@ -18,3 +19,4 @@ group_vars/*.yml
 .tox
 ceph-ansible.spec
 *.retry
+*.pytest_cache
