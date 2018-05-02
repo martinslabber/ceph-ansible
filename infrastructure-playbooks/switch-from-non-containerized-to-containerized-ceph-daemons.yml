@@ -73,13 +73,20 @@
         state: stopped
         enabled: no
 
-    - set_fact:
+    - name: set_fact ceph_uid for ubuntu
+      set_fact:
         ceph_uid: 64045
-      when: ceph_docker_image_tag | match("latest") or ceph_docker_image_tag | search("ubuntu")
+      when: ceph_docker_image_tag | search("ubuntu")
 
-    - set_fact:
+    - name: set_fact ceph_uid for red hat
+      set_fact:
         ceph_uid: 167
-      when: ceph_docker_image_tag | search("centos") or ceph_docker_image | search("rhceph") or ceph_docker_image_tag | search("fedora")
+      when: ceph_docker_image_tag | match("latest") or ceph_docker_image_tag | search("centos") or ceph_docker_image_tag | search("fedora")
+
+    - name: set_fact ceph_uid for rhel
+      set_fact:
+         ceph_uid: 167
+      when: ceph_docker_image | search("rhceph")
 
     - name: set proper ownership on ceph directories
       file:
@@ -217,9 +224,15 @@
         ceph_uid: 64045
       when: ceph_docker_image_tag | match("latest") or ceph_docker_image_tag | search("ubuntu")
 
-    - set_fact:
+    - name: set_fact ceph_uid for red hat
+      set_fact:
         ceph_uid: 167
-      when: ceph_docker_image_tag | search("centos") or ceph_docker_image | search("rhceph") or ceph_docker_image_tag | search("fedora")
+      when: ceph_docker_image_tag | match("latest") or ceph_docker_image_tag | search("centos") or ceph_docker_image_tag | search("fedora")
+
+    - name: set_fact ceph_uid for rhel
+      set_fact:
+         ceph_uid: 167
+      when: ceph_docker_image | search("rhceph")
 
     - name: set proper ownership on ceph directories
       file:
@@ -251,12 +264,18 @@
       with_items: "{{ devices }}"
       register: osd_running
 
+    - name: resolve device(s) path(s)
+      command: readlink -f {{ item }}
+      changed_when: false
+      with_items: "{{ devices }}"
+      register: devices_canonicalize
+
     - name: unmount all the osd directories
-      command: umount "{{ item.0 }}"1
+      command: umount "{{ item.0.stdout }}"1
       changed_when: false
       failed_when: false
       with_together:
-        - "{{ devices }}"
+        - "{{ devices_canonicalize.results }}"
         - "{{ osd_running.results }}"
       when:
         - item.1.get("rc", 0) != 0
