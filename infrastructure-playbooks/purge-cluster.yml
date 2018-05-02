@@ -328,22 +328,22 @@
     failed_when: false
     register: ceph_lockbox_partition_to_erase_path
 
-  - name: zap and destroy OSDs created by ceph-volume
-    ceph_volume:
-      data: "{{ item.data }}"
-      data_vg: "{{ item.data_vg|default(omit) }}"
-      journal: "{{ item.journal|default(omit) }}"
-      journal_vg: "{{ item.journal_vg|default(omit) }}"
-      db: "{{ item.db|default(omit) }}"
-      db_vg: "{{ item.db_vg|default(omit) }}"
-      wal: "{{ item.wal|default(omit) }}"
-      wal_vg: "{{ item.wal_vg|default(omit) }}"
-      action: "zap"
-    environment:
-      CEPH_VOLUME_DEBUG: 1
-    with_items: "{{ lvm_volumes }}"
-    when:
-      - osd_scenario == "lvm"
+    # - name: "zap and destroy OSDs created by ceph-volume"
+    # - ceph_volume:
+    # -   data: "{{ item.data }}"
+    # -   data_vg: "{{ item.data_vg|default(omit) }}"
+    # -   journal: "{{ item.journal|default(omit) }}"
+    # -   journal_vg: "{{ item.journal_vg|default(omit) }}"
+    # -   db: "{{ item.db|default(omit) }}"
+    # -   db_vg: "{{ item.db_vg|default(omit) }}"
+    # -   wal: "{{ item.wal|default(omit) }}"
+    # -   wal_vg: "{{ item.wal_vg|default(omit) }}"
+    # -   action: "zap"
+    # - environment:
+    # -   CEPH_VOLUME_DEBUG: 1
+    # - with_items: "{{ lvm_volumes }}"
+    # - when:
+    # -   - osd_scenario == "lvm"
 
   - name: get ceph block partitions
     shell: |
