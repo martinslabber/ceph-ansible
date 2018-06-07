@@ -156,6 +156,7 @@
 - name: resolve device link(s)
   command: readlink -e {{ item }}
   changed_when: false
+  ignore_errors: true # Continue even if the device is not found.
   with_items: "{{ devices }}"
   register: devices_prepare_canonicalize
   when:
