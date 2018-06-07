@@ -154,9 +154,9 @@
       or not rbd_client_directory_mode
 
 - name: resolve device link(s)
-  command: readlink -e {{ item }}
+  shell: "readlink -e {{ item }} | tee /dev/null"
   changed_when: false
-  ignore_errors: true # Continue even if the device is not found.
+  # ignore_errors: true # Continue even if the device is not found.
   with_items: "{{ devices }}"
   register: devices_prepare_canonicalize
   when:
